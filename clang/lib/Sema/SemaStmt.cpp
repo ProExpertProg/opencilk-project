@@ -3141,6 +3141,7 @@ GetCilkForStride(Sema &S, llvm::SmallPtrSetImpl<VarDecl *> &Decls,
   return Invalid;
 }
 
+// Check the _Cilk_for initialization statement.  Returns true on error.
 static bool CheckCilkForInit(Sema &S, SourceLocation &CilkForLoc, Stmt *First) {
   if (!First) {
     S.Diag(CilkForLoc, diag::err_cilk_for_initializer_expected_decl);
@@ -3567,20 +3568,20 @@ Sema::ActOnCilkForStmt(SourceLocation CilkForLoc, SourceLocation LParenLoc,
     return StmtResult();
 
   // if (!getLangOpts().CPlusPlus) {
-    if (DeclStmt *DS = dyn_cast_or_null<DeclStmt>(First)) {
-      // C99 6.8.5p3: The declaration part of a 'for' statement shall only
-      // declare identifiers for objects having storage class 'auto' or
-      // 'register'.
-      for (auto *DI : DS->decls()) {
-        VarDecl *VD = dyn_cast<VarDecl>(DI);
-        if (VD && VD->isLocalVarDecl() && !VD->hasLocalStorage())
-          VD = nullptr;
-        if (!VD) {
-          Diag(DI->getLocation(), diag::err_non_local_variable_decl_in_for);
-          DI->setInvalidDecl();
-        }
+  if (DeclStmt *DS = dyn_cast_or_null<DeclStmt>(First)) {
+    // C99 6.8.5p3: The declaration part of a 'for' statement shall only
+    // declare identifiers for objects having storage class 'auto' or
+    // 'register'.
+    for (auto *DI : DS->decls()) {
+      VarDecl *VD = dyn_cast<VarDecl>(DI);
+      if (VD && VD->isLocalVarDecl() && !VD->hasLocalStorage())
+        VD = nullptr;
+      if (!VD) {
+        Diag(DI->getLocation(), diag::err_non_local_variable_decl_in_for);
+        DI->setInvalidDecl();
       }
     }
+  }
   // }
 
   CheckBreakContinueBinding(Second.get().second);
