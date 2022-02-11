@@ -216,6 +216,12 @@ void OpenCilkABI::prepareModule() {
       else
         Fn->removeFnAttr(Attribute::AlwaysInline);
     }
+    if (GlobalVariable *AlignVar =
+        M.getGlobalVariable("__cilkrts_stack_frame_align", true)) {
+      AlignVar->setLinkage(GlobalValue::PrivateLinkage);
+      if (auto Align = AlignVar->getAlign())
+        StackFrameAlign = Align.getValue();
+    }
   } else if (DebugABICalls) {
     if (StackFrameTy->isOpaque()) {
       // Create a dummy __cilkrts_stack_frame structure, for debugging purposes
@@ -346,7 +352,7 @@ Value *OpenCilkABI::CreateStackFrame(Function &F) {
   AllocaInst *SF = B.CreateAlloca(SFTy, DL.getAllocaAddrSpace(),
                                   /*ArraySize*/ nullptr,
                                   /*Name*/ StackFrameName);
-  SF->setAlignment(Align(8));
+  SF->setAlignment(StackFrameAlign);
 
   return SF;
 }
