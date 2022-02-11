@@ -230,6 +230,17 @@ void OpenCilkABI::prepareModule() {
       else
         Fn->removeFnAttr(Attribute::AlwaysInline);
     }
+    if (GlobalVariable *AlignVar =
+        M.getGlobalVariable("__cilkrts_stack_frame_align", true)) {
+      AlignVar->setLinkage(GlobalValue::AvailableExternallyLinkage);
+      if (AlignVar->isConstant()) {
+        if (const Constant *Init = AlignVar->getInitializer()) {
+          if (const ConstantInt *CI = dyn_cast<ConstantInt>(Init))
+            // TODO: check that value is power of 2 in range
+            StackFrameAlign = Align(CI->getZExtValue());
+        }
+      }
+    }
   } else if (DebugABICalls) {
     if (StackFrameTy->isOpaque()) {
       // Create a dummy __cilkrts_stack_frame structure, for debugging purposes
@@ -360,7 +371,7 @@ Value *OpenCilkABI::CreateStackFrame(Function &F) {
   AllocaInst *SF = B.CreateAlloca(SFTy, DL.getAllocaAddrSpace(),
                                   /*ArraySize*/ nullptr,
                                   /*Name*/ StackFrameName);
-  SF->setAlignment(Align(8));
+  SF->setAlignment(StackFrameAlign);
 
   return SF;
 }
