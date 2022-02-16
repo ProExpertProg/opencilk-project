@@ -29,9 +29,13 @@ class RuntimeCilkFor : public LoopOutlineProcessor {
   Type *GrainsizeType = nullptr;
   FunctionCallee CilkRTSCilkFor32 = nullptr;
   FunctionCallee CilkRTSCilkFor64 = nullptr;
+  FunctionCallee CilkRTSCilkForInclusive32 = nullptr;
+  FunctionCallee CilkRTSCilkForInclusive64 = nullptr;
 
   FunctionCallee Get__cilkrts_cilk_for_32();
   FunctionCallee Get__cilkrts_cilk_for_64();
+  FunctionCallee Get__cilkrts_cilk_for_inclusive_32();
+  FunctionCallee Get__cilkrts_cilk_for_inclusive_64();
 
 public:
   RuntimeCilkFor(Module &M) : LoopOutlineProcessor(M) {
