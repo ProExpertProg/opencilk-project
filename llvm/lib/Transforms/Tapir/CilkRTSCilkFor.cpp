@@ -76,6 +76,46 @@ FunctionCallee RuntimeCilkFor::Get__cilkrts_cilk_for_64() {
   return CilkRTSCilkFor64;
 }
 
+FunctionCallee RuntimeCilkFor::Get__cilkrts_cilk_for_inclusive_32() {
+  if (CilkRTSCilkForInclusive32)
+    return CilkRTSCilkForInclusive32;
+
+  LLVMContext &C = M.getContext();
+  Type *VoidTy = Type::getVoidTy(C);
+  Type *VoidPtrTy = Type::getInt8PtrTy(C);
+  Type *CountTy = Type::getInt32Ty(C);
+  FunctionType *BodyTy =
+      FunctionType::get(VoidTy, {VoidPtrTy, CountTy, CountTy}, false);
+  FunctionType *FTy = FunctionType::get(
+      VoidTy,
+      {PointerType::getUnqual(BodyTy), VoidPtrTy, CountTy, Type::getInt32Ty(C)},
+      false);
+  CilkRTSCilkForInclusive32 =
+      M.getOrInsertFunction("__cilkrts_cilk_for_inclusive_32", FTy);
+
+  return CilkRTSCilkForInclusive32;
+}
+
+FunctionCallee RuntimeCilkFor::Get__cilkrts_cilk_for_inclusive_64() {
+  if (CilkRTSCilkForInclusive64)
+    return CilkRTSCilkForInclusive64;
+
+  LLVMContext &C = M.getContext();
+  Type *VoidTy = Type::getVoidTy(C);
+  Type *VoidPtrTy = Type::getInt8PtrTy(C);
+  Type *CountTy = Type::getInt64Ty(C);
+  FunctionType *BodyTy =
+      FunctionType::get(VoidTy, {VoidPtrTy, CountTy, CountTy}, false);
+  FunctionType *FTy = FunctionType::get(
+      VoidTy,
+      {PointerType::getUnqual(BodyTy), VoidPtrTy, CountTy, Type::getInt32Ty(C)},
+      false);
+  CilkRTSCilkForInclusive64 =
+      M.getOrInsertFunction("__cilkrts_cilk_for_inclusive_64", FTy);
+
+  return CilkRTSCilkForInclusive64;
+}
+
 void RuntimeCilkFor::setupLoopOutlineArgs(
     Function &F, ValueSet &HelperArgs, SmallVectorImpl<Value *> &HelperInputs,
     ValueSet &InputSet, const SmallVectorImpl<Value *> &LCArgs,
@@ -147,9 +187,11 @@ void RuntimeCilkFor::processOutlinedLoopCall(TapirLoopInfo &TL,
   // Get the correct CilkForABI call.
   FunctionCallee CilkForABI;
   if (PrimaryIVTy->isIntegerTy(32))
-    CilkForABI = CILKRTS_FUNC(cilk_for_32);
+    CilkForABI = TL.isInclusiveRange() ? CILKRTS_FUNC(cilk_for_inclusive_32)
+                                       : CILKRTS_FUNC(cilk_for_32);
   else if (PrimaryIVTy->isIntegerTy(64))
-    CilkForABI = CILKRTS_FUNC(cilk_for_64);
+    CilkForABI = TL.isInclusiveRange() ? CILKRTS_FUNC(cilk_for_inclusive_64)
+                                       : CILKRTS_FUNC(cilk_for_64);
   else
     llvm_unreachable("No CilkForABI call matches IV type for Tapir loop.");
 
