@@ -15,7 +15,9 @@
 #include "llvm/ADT/BreadthFirstIterator.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/Analysis/PostDominators.h"
+#include "llvm/Analysis/TapirTaskInfo.h"
 #include "llvm/Analysis/ValueTracking.h"
+#include "llvm/Transforms/Utils/TapirUtils.h"
 
 using namespace llvm;
 
@@ -34,20 +36,24 @@ static const char *VerboseDebug = DEBUG_TYPE "-verbose";
 /// Returns true if the loop structure satisfies the basic requirements and
 /// false otherwise.
 static bool checkLoopsStructure(const Loop &OuterLoop, const Loop &InnerLoop,
-                                ScalarEvolution &SE);
+                                ScalarEvolution &SE, TaskInfo &TI,
+                                bool AllowTapirLoops = false);
 
 //===----------------------------------------------------------------------===//
 // LoopNest implementation
 //
 
-LoopNest::LoopNest(Loop &Root, ScalarEvolution &SE)
-    : MaxPerfectDepth(getMaxPerfectDepth(Root, SE)) {
+LoopNest::LoopNest(Loop &Root, ScalarEvolution &SE, TaskInfo &TI,
+                   bool AllowTapirLoops)
+    : MaxPerfectDepth(getMaxPerfectDepth(Root, SE, TI, AllowTapirLoops)),
+      AllowTapirLoops(AllowTapirLoops) {
   append_range(Loops, breadth_first(&Root));
 }
 
-std::unique_ptr<LoopNest> LoopNest::getLoopNest(Loop &Root,
-                                                ScalarEvolution &SE) {
-  return std::make_unique<LoopNest>(Root, SE);
+std::unique_ptr<LoopNest> LoopNest::getLoopNest(Loop &Root, ScalarEvolution &SE,
+                                                TaskInfo &TI,
+                                                bool AllowTapirLoops) {
+  return std::make_unique<LoopNest>(Root, SE, TI, AllowTapirLoops);
 }
 
 static CmpInst *getOuterLoopLatchCmp(const Loop &OuterLoop) {
@@ -87,8 +93,11 @@ static bool checkSafeInstruction(const Instruction &I,
                                  const CmpInst *OuterLoopLatchCmp,
                                  Optional<Loop::LoopBounds> OuterLoopLB) {
 
-  bool IsAllowed =
-      isSafeToSpeculativelyExecute(&I) || isa<PHINode>(I) || isa<BranchInst>(I);
+  bool IsAllowed = isSafeToSpeculativelyExecute(&I) || isa<PHINode>(I) ||
+                   isa<BranchInst>(I) || isa<DetachInst>(I) ||
+                   isa<ReattachInst>(I) || isa<SyncInst>(I) ||
+                   isTapirIntrinsic(Intrinsic::syncregion_start, &I);
+
   if (!IsAllowed)
     return false;
   // The only binary instruction allowed is the outer loop step instruction,
@@ -102,13 +111,15 @@ static bool checkSafeInstruction(const Instruction &I,
 }
 
 bool LoopNest::arePerfectlyNested(const Loop &OuterLoop, const Loop &InnerLoop,
-                                  ScalarEvolution &SE) {
-  return (analyzeLoopNestForPerfectNest(OuterLoop, InnerLoop, SE) ==
-          PerfectLoopNest);
+                                  ScalarEvolution &SE, TaskInfo &TI,
+                                  bool AllowTapirLoops) {
+  return (analyzeLoopNestForPerfectNest(OuterLoop, InnerLoop, SE, TI,
+                                        AllowTapirLoops) == PerfectLoopNest);
 }
 
 LoopNest::LoopNestEnum LoopNest::analyzeLoopNestForPerfectNest(
-    const Loop &OuterLoop, const Loop &InnerLoop, ScalarEvolution &SE) {
+    const Loop &OuterLoop, const Loop &InnerLoop, ScalarEvolution &SE,
+    TaskInfo &TI, bool AllowTapirLoops) {
 
   assert(!OuterLoop.isInnermost() && "Outer loop should have subloops");
   assert(!InnerLoop.isOutermost() && "Inner loop should have a parent");
@@ -122,7 +133,7 @@ LoopNest::LoopNestEnum LoopNest::analyzeLoopNestForPerfectNest(
   //    or jump around the inner loop to the outer loop latch
   //  - if the inner loop latch exits the inner loop, it should 'flow' into
   //    the outer loop latch.
-  if (!checkLoopsStructure(OuterLoop, InnerLoop, SE)) {
+  if (!checkLoopsStructure(OuterLoop, InnerLoop, SE, TI, AllowTapirLoops)) {
     LLVM_DEBUG(dbgs() << "Not perfectly nested: invalid loop structure.\n");
     return InvalidLoopStructure;
   }
@@ -179,10 +190,13 @@ LoopNest::LoopNestEnum LoopNest::analyzeLoopNestForPerfectNest(
   return PerfectLoopNest;
 }
 
-LoopNest::InstrVectorTy LoopNest::getInterveningInstructions(
-    const Loop &OuterLoop, const Loop &InnerLoop, ScalarEvolution &SE) {
+LoopNest::InstrVectorTy
+LoopNest::getInterveningInstructions(const Loop &OuterLoop,
+                                     const Loop &InnerLoop, ScalarEvolution &SE,
+                                     TaskInfo &TI, bool AllowTapirLoops) {
   InstrVectorTy Instr;
-  switch (analyzeLoopNestForPerfectNest(OuterLoop, InnerLoop, SE)) {
+  switch (analyzeLoopNestForPerfectNest(OuterLoop, InnerLoop, SE, TI,
+                                        AllowTapirLoops)) {
   case PerfectLoopNest:
     LLVM_DEBUG(dbgs() << "The loop Nest is Perfect, returning empty "
                          "instruction vector. \n";);
@@ -238,8 +252,8 @@ LoopNest::InstrVectorTy LoopNest::getInterveningInstructions(
   return Instr;
 }
 
-SmallVector<LoopVectorTy, 4>
-LoopNest::getPerfectLoops(ScalarEvolution &SE) const {
+SmallVector<LoopVectorTy, 4> LoopNest::getPerfectLoops(ScalarEvolution &SE,
+                                                       TaskInfo &TI) const {
   SmallVector<LoopVectorTy, 4> LV;
   LoopVectorTy PerfectNest;
 
@@ -248,7 +262,8 @@ LoopNest::getPerfectLoops(ScalarEvolution &SE) const {
       PerfectNest.push_back(L);
 
     auto &SubLoops = L->getSubLoops();
-    if (SubLoops.size() == 1 && arePerfectlyNested(*L, *SubLoops.front(), SE)) {
+    if (SubLoops.size() == 1 &&
+        arePerfectlyNested(*L, *SubLoops.front(), SE, TI, AllowTapirLoops)) {
       PerfectNest.push_back(SubLoops.front());
     } else {
       LV.push_back(PerfectNest);
@@ -259,7 +274,8 @@ LoopNest::getPerfectLoops(ScalarEvolution &SE) const {
   return LV;
 }
 
-unsigned LoopNest::getMaxPerfectDepth(const Loop &Root, ScalarEvolution &SE) {
+unsigned LoopNest::getMaxPerfectDepth(const Loop &Root, ScalarEvolution &SE,
+                                      TaskInfo &TI, bool AllowTapirLoops) {
   LLVM_DEBUG(dbgs() << "Get maximum perfect depth of loop nest rooted by loop '"
                     << Root.getName() << "'\n");
 
@@ -269,7 +285,8 @@ unsigned LoopNest::getMaxPerfectDepth(const Loop &Root, ScalarEvolution &SE) {
 
   while (SubLoops->size() == 1) {
     const Loop *InnerLoop = SubLoops->front();
-    if (!arePerfectlyNested(*CurrentLoop, *InnerLoop, SE)) {
+    if (!arePerfectlyNested(*CurrentLoop, *InnerLoop, SE, TI,
+                            AllowTapirLoops)) {
       LLVM_DEBUG({
         dbgs() << "Not a perfect nest: loop '" << CurrentLoop->getName()
                << "' is not perfectly nested with loop '"
@@ -314,7 +331,8 @@ const BasicBlock &LoopNest::skipEmptyBlockUntil(const BasicBlock *From,
 }
 
 static bool checkLoopsStructure(const Loop &OuterLoop, const Loop &InnerLoop,
-                                ScalarEvolution &SE) {
+                                ScalarEvolution &SE, TaskInfo &TI,
+                                bool AllowTapirLoops) {
   // The inner loop must be the only outer loop's child.
   if ((OuterLoop.getSubLoops().size() != 1) ||
       (InnerLoop.getParentLoop() != &OuterLoop))
@@ -360,12 +378,47 @@ static bool checkLoopsStructure(const Loop &OuterLoop, const Loop &InnerLoop,
   // Ensure the only branch that may exist between the loops is the inner loop
   // guard.
   if (OuterLoopHeader != InnerLoopPreHeader) {
-    const BasicBlock &SingleSucc =
-        LoopNest::skipEmptyBlockUntil(OuterLoopHeader, InnerLoopPreHeader);
+    const BasicBlock *SingleSucc =
+        &LoopNest::skipEmptyBlockUntil(OuterLoopHeader, InnerLoopPreHeader);
+
+    // If Tapir loops are allowed in perfect nests, let's check the possibility.
+    if (SingleSucc != InnerLoopPreHeader && AllowTapirLoops) {
+      Task *T = getTaskIfTapirLoopStructure(&OuterLoop, &TI);
+      if (T) {
+        assert(T->getDetach() == SingleSucc->getTerminator());
+
+        // propagate through the detach
+        SingleSucc =
+            &LoopNest::skipEmptyBlockUntil(T->getEntry(), InnerLoopPreHeader);
+
+        // If there is an inner loop guard, start of sync region will happen
+        // before the inner loop guard. If so, we want to skip that so that
+        // SingleSucc points to the inner loop guard, which is handled after
+        // this.
+        if (SingleSucc != InnerLoopPreHeader) {
+          const BasicBlock::InstListType &Insts = SingleSucc->getInstList();
+          const BasicBlock *Next = SingleSucc->getUniqueSuccessor();
+          if (Next && Insts.size() == 2 &&
+              isTapirIntrinsic(Intrinsic::syncregion_start, &Insts.front())) {
+            SingleSucc =
+                &LoopNest::skipEmptyBlockUntil(Next, InnerLoopPreHeader);
+          } else {
+            DEBUG_WITH_TYPE(VerboseDebug, {
+              dbgs() << "Could not reach inner loop preheader"
+                     << InnerLoopPreHeader->getName()
+                     << " by skipping a syncregion_start in "
+                     << SingleSucc->getName()
+                     << ". That's either because there isn't one or because it "
+                        "isn't a simple syncregion_start block.\n";
+            });
+          }
+        }
+      }
+    }
 
     // no conditional branch present
-    if (&SingleSucc != InnerLoopPreHeader) {
-      const BranchInst *BI = dyn_cast<BranchInst>(SingleSucc.getTerminator());
+    if (SingleSucc != InnerLoopPreHeader) {
+      const BranchInst *BI = dyn_cast<BranchInst>(SingleSucc->getTerminator());
 
       if (!BI || BI != InnerLoop.getLoopGuardBranch())
         return false;
@@ -390,7 +443,7 @@ static bool checkLoopsStructure(const Loop &OuterLoop, const Loop &InnerLoop,
         if (PotentialInnerPreHeader == InnerLoopPreHeader)
           continue;
         if (PotentialOuterLatch == OuterLoopLatch)
-          continue;
+          continue; // TODO(lgovedic) potentially allow this to be the reattach block
 
         // If `InnerLoopExit` contains LCSSA Phi instructions, additional block
         // may be inserted before the `OuterLoopLatch` to which `BI` jumps. The
@@ -442,6 +495,7 @@ raw_ostream &llvm::operator<<(raw_ostream &OS, const LoopNest &LN) {
   else
     OS << "false";
   OS << ", Depth=" << LN.getNestDepth();
+  OS << ", MaxPerfectDepth=" << LN.getMaxPerfectDepth();
   OS << ", OutermostLoop: " << LN.getOutermostLoop().getName();
   OS << ", Loops: ( ";
   for (const Loop *L : LN.getLoops())
@@ -458,7 +512,7 @@ raw_ostream &llvm::operator<<(raw_ostream &OS, const LoopNest &LN) {
 PreservedAnalyses LoopNestPrinterPass::run(Loop &L, LoopAnalysisManager &AM,
                                            LoopStandardAnalysisResults &AR,
                                            LPMUpdater &U) {
-  if (auto LN = LoopNest::getLoopNest(L, AR.SE))
+  if (auto LN = LoopNest::getLoopNest(L, AR.SE, AR.TI, true))
     OS << *LN << "\n";
 
   return PreservedAnalyses::all();

@@ -57,6 +57,7 @@
 #include "llvm/Analysis/MemorySSAUpdater.h"
 #include "llvm/Analysis/OptimizationRemarkEmitter.h"
 #include "llvm/Analysis/ScalarEvolution.h"
+#include "llvm/Analysis/TapirTaskInfo.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/IR/Dominators.h"
@@ -978,6 +979,7 @@ bool LoopFlattenLegacyPass::runOnFunction(Function &F) {
   auto *TTI = &TTIP.getTTI(F);
   auto *AC = &getAnalysis<AssumptionCacheTracker>().getAssumptionCache(F);
   auto *MSSA = getAnalysisIfAvailable<MemorySSAWrapperPass>();
+  TaskInfo &TI = getAnalysis<TaskInfoWrapperPass>().getTaskInfo();
 
   Optional<MemorySSAUpdater> MSSAU;
   if (MSSA)
@@ -985,7 +987,7 @@ bool LoopFlattenLegacyPass::runOnFunction(Function &F) {
 
   bool Changed = false;
   for (Loop *L : *LI) {
-    auto LN = LoopNest::getLoopNest(*L, *SE);
+    auto LN = LoopNest::getLoopNest(*L, *SE, TI);
     Changed |= Flatten(*LN, DT, LI, SE, AC, TTI, nullptr,
                        MSSAU.hasValue() ? MSSAU.getPointer() : nullptr);
   }

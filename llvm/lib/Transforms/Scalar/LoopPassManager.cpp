@@ -102,7 +102,7 @@ LoopPassManager::runWithLoopNestPasses(Loop &L, LoopAnalysisManager &AM,
       // If the loop-nest object calculated before is no longer valid,
       // re-calculate it here before running the loop-nest pass.
       if (!IsLoopNestPtrValid) {
-        LoopNestPtr = LoopNest::getLoopNest(L, AR.SE);
+        LoopNestPtr = LoopNest::getLoopNest(L, AR.SE, AR.TI);
         IsLoopNestPtrValid = true;
       }
       PassPA = runSinglePass(*LoopNestPtr, Pass, AM, AR, U, PI);

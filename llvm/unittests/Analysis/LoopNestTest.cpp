@@ -9,6 +9,7 @@
 #include "llvm/Analysis/AssumptionCache.h"
 #include "llvm/Analysis/LoopNestAnalysis.h"
 #include "llvm/Analysis/ScalarEvolution.h"
+#include "llvm/Analysis/TapirTaskInfo.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/AsmParser/Parser.h"
 #include "llvm/IR/Dominators.h"
@@ -20,7 +21,7 @@ using namespace llvm;
 /// Build the loop nest analysis for a loop nest and run the given test \p Test.
 static void runTest(
     Module &M, StringRef FuncName,
-    function_ref<void(Function &F, LoopInfo &LI, ScalarEvolution &SE)> Test) {
+    function_ref<void(Function &F, LoopInfo &LI, ScalarEvolution &SE, TaskInfo &TI)> Test) {
   auto *F = M.getFunction(FuncName);
   ASSERT_NE(F, nullptr) << "Could not find " << FuncName;
 
@@ -31,7 +32,10 @@ static void runTest(
   LoopInfo LI(DT);
   ScalarEvolution SE(*F, TLI, AC, DT, LI);
 
-  Test(*F, LI, SE);
+  TaskInfo TI{};
+  TI.analyze(*F, DT);
+
+  Test(*F, LI, SE, TI);
 }
 
 static std::unique_ptr<Module> makeLLVMModule(LLVMContext &Context,
@@ -82,7 +86,7 @@ TEST(LoopNestTest, PerfectLoopNest) {
   LLVMContext Context;
   std::unique_ptr<Module> M = makeLLVMModule(Context, ModuleStr);
 
-  runTest(*M, "foo", [&](Function &F, LoopInfo &LI, ScalarEvolution &SE) {
+  runTest(*M, "foo", [&](Function &F, LoopInfo &LI, ScalarEvolution &SE, TaskInfo &TI ) {
     Function::iterator FI = F.begin();
     // Skip the first basic block (entry), get to the outer loop header.
     BasicBlock *Header = &*(++FI);
@@ -90,7 +94,7 @@ TEST(LoopNestTest, PerfectLoopNest) {
     Loop *L = LI.getLoopFor(Header);
     EXPECT_NE(L, nullptr);
 
-    LoopNest LN(*L, SE);
+    LoopNest LN(*L, SE, TI);
     EXPECT_TRUE(LN.areAllLoopsSimplifyForm());
 
     // Ensure that we can identify the outermost loop in the nest.
@@ -120,7 +124,8 @@ TEST(LoopNestTest, PerfectLoopNest) {
     EXPECT_EQ(LN.getLoop(LN.getLoopIndex(*IL)), IL);
 
     // Ensure the loop nest is recognized as perfect in its entirety.
-    const SmallVector<LoopVectorTy, 4> &PLV = LN.getPerfectLoops(SE);
+    const SmallVector<LoopVectorTy, 4> &PLV =
+        LN.getPerfectLoops(SE, TI);
     EXPECT_EQ(PLV.size(), 1ull);
     EXPECT_EQ(PLV.front().size(), 2ull);
 
@@ -128,7 +133,9 @@ TEST(LoopNestTest, PerfectLoopNest) {
     EXPECT_EQ(LN.getNestDepth(), 2u);
     EXPECT_EQ(LN.getMaxPerfectDepth(), 2u);
 
-    EXPECT_TRUE(LN.getInterveningInstructions(OL, *IL, SE).empty());
+    EXPECT_TRUE(
+        LN.getInterveningInstructions(OL, *IL, SE, TI, false)
+            .empty());
   });
 }
 
@@ -178,7 +185,7 @@ TEST(LoopNestTest, ImperfectLoopNest) {
   LLVMContext Context;
   std::unique_ptr<Module> M = makeLLVMModule(Context, ModuleStr);
 
-  runTest(*M, "foo", [&](Function &F, LoopInfo &LI, ScalarEvolution &SE) {
+  runTest(*M, "foo", [&](Function &F, LoopInfo &LI, ScalarEvolution &SE, TaskInfo &TI ) {
     Function::iterator FI = F.begin();
     // Skip the first basic block (entry), get to the outermost loop header.
     BasicBlock *Header = &*(++FI);
@@ -186,7 +193,7 @@ TEST(LoopNestTest, ImperfectLoopNest) {
     Loop *L = LI.getLoopFor(Header);
     EXPECT_NE(L, nullptr);
 
-    LoopNest LN(*L, SE);
+    LoopNest LN(*L, SE, TI);
     EXPECT_TRUE(LN.areAllLoopsSimplifyForm());
 
     dbgs() << "LN: " << LN << "\n";
@@ -205,7 +212,8 @@ TEST(LoopNestTest, ImperfectLoopNest) {
     EXPECT_EQ(Loops.size(), 3ull);
 
     // Ensure the loop nest is recognized as having 2 separate perfect loops groups.
-    const SmallVector<LoopVectorTy, 4> &PLV = LN.getPerfectLoops(SE);
+    const SmallVector<LoopVectorTy, 4> &PLV =
+        LN.getPerfectLoops(SE, TI);
     EXPECT_EQ(PLV.size(), 2ull);
     EXPECT_EQ(PLV.front().size(), 2ull);
     EXPECT_EQ(PLV.back().size(), 1ull);
@@ -214,7 +222,9 @@ TEST(LoopNestTest, ImperfectLoopNest) {
     EXPECT_EQ(LN.getNestDepth(), 3u);
     EXPECT_EQ(LN.getMaxPerfectDepth(), 2u);
 
-    EXPECT_TRUE(LN.getInterveningInstructions(OL, *IL, SE).empty());
+    EXPECT_TRUE(
+        LN.getInterveningInstructions(OL, *IL, SE, TI)
+            .empty());
   });
 }
 
@@ -264,7 +274,7 @@ TEST(LoopNestTest, InterveningInstrLoopNest) {
   LLVMContext Context;
   std::unique_ptr<Module> M = makeLLVMModule(Context, ModuleStr);
 
-  runTest(*M, "foo", [&](Function &F, LoopInfo &LI, ScalarEvolution &SE) {
+  runTest(*M, "foo", [&](Function &F, LoopInfo &LI, ScalarEvolution &SE, TaskInfo &TI ) {
     Function::iterator FI = F.begin();
     // Skip the first basic block (entry), get to the outer loop header.
     BasicBlock *Header = &*(++FI);
@@ -272,7 +282,7 @@ TEST(LoopNestTest, InterveningInstrLoopNest) {
     Loop *L = LI.getLoopFor(Header);
     EXPECT_NE(L, nullptr);
 
-    LoopNest LN(*L, SE);
+    LoopNest LN(*L, SE, TI);
     EXPECT_TRUE(LN.areAllLoopsSimplifyForm());
 
     // Ensure that we can identify the outermost loop in the nest.
@@ -289,7 +299,8 @@ TEST(LoopNestTest, InterveningInstrLoopNest) {
     EXPECT_EQ(Loops.size(), 2ull);
 
     // Ensure the loop nest is not recognized as perfect in its entirety.
-    const SmallVector<LoopVectorTy, 4> &PLV = LN.getPerfectLoops(SE);
+    const SmallVector<LoopVectorTy, 4> &PLV =
+        LN.getPerfectLoops(SE, TI);
     EXPECT_EQ(PLV.size(), 2ull);
     EXPECT_EQ(PLV.front().size(), 1ull);
     EXPECT_EQ(PLV.back().size(), 1ull);
@@ -300,7 +311,7 @@ TEST(LoopNestTest, InterveningInstrLoopNest) {
 
     // Ensure enclosed instructions are recognized
     const LoopNest::InstrVectorTy InstrV =
-        LN.getInterveningInstructions(OL, *IL, SE);
+        LN.getInterveningInstructions(OL, *IL, SE, TI);
     EXPECT_EQ(InstrV.size(), 5u);
 
     Instruction *SI = getInstructionByName(F, "varr")->getNextNode();
@@ -317,3 +328,5 @@ TEST(LoopNestTest, InterveningInstrLoopNest) {
     EXPECT_EQ(InstrV.back(), CI);
   });
 }
+
+// TODO(lgovedic) tests for perfect Tapir Loop nests

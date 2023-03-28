@@ -23,6 +23,7 @@ namespace llvm {
 using LoopVectorTy = SmallVector<Loop *, 8>;
 
 class LPMUpdater;
+class TaskInfo;
 
 /// This class represents a loop nest and can be used to query its properties.
 class LLVM_EXTERNAL_VISIBILITY LoopNest {
@@ -30,12 +31,15 @@ public:
   using InstrVectorTy = SmallVector<const Instruction *>;
 
   /// Construct a loop nest rooted by loop \p Root.
-  LoopNest(Loop &Root, ScalarEvolution &SE);
+  LoopNest(Loop &Root, ScalarEvolution &SE, TaskInfo &TI,
+           bool AllowTapirLoops = false);
 
   LoopNest() = delete;
 
   /// Construct a LoopNest object.
-  static std::unique_ptr<LoopNest> getLoopNest(Loop &Root, ScalarEvolution &SE);
+  static std::unique_ptr<LoopNest> getLoopNest(Loop &Root, ScalarEvolution &SE,
+                                               TaskInfo &TI,
+                                               bool AllowTapirLoops = false);
 
   /// Return true if the given loops \p OuterLoop and \p InnerLoop are
   /// perfectly nested with respect to each other, and false otherwise.
@@ -49,13 +53,16 @@ public:
   /// arePerfectlyNested(loop_j, loop_k, SE) would return true.
   /// arePerfectlyNested(loop_i, loop_k, SE) would return false.
   static bool arePerfectlyNested(const Loop &OuterLoop, const Loop &InnerLoop,
-                                 ScalarEvolution &SE);
+                                 ScalarEvolution &SE, TaskInfo &TI,
+                                 bool AllowTapirLoops = false);
 
   /// Return a vector of instructions that prevent the LoopNest given
   /// by loops \p OuterLoop and \p InnerLoop from being perfect.
   static InstrVectorTy getInterveningInstructions(const Loop &OuterLoop,
                                                   const Loop &InnerLoop,
-                                                  ScalarEvolution &SE);
+                                                  ScalarEvolution &SE,
+                                                  TaskInfo &TI,
+                                                  bool AllowTapirLoops = false);
 
   /// Return the maximum nesting depth of the loop nest rooted by loop \p Root.
   /// For example given the loop nest:
@@ -66,7 +73,9 @@ public:
   ///       for(k) // loop at level 3
   /// \endcode
   /// getMaxPerfectDepth(Loop_i) would return 2.
-  static unsigned getMaxPerfectDepth(const Loop &Root, ScalarEvolution &SE);
+  static unsigned getMaxPerfectDepth(const Loop &Root, ScalarEvolution &SE,
+                                     TaskInfo &TI,
+                                     bool AllowTapirLoops = false);
 
   /// Recursivelly traverse all empty 'single successor' basic blocks of \p From
   /// (if there are any). When \p CheckUniquePred is set to true, check if
@@ -141,7 +150,8 @@ public:
   ///       for(k) // L3
   ///         for(l) // L4
   /// \endcode
-  SmallVector<LoopVectorTy, 4> getPerfectLoops(ScalarEvolution &SE) const;
+  SmallVector<LoopVectorTy, 4> getPerfectLoops(ScalarEvolution &SE,
+                                               TaskInfo &TI) const;
 
   /// Return the loop nest depth (i.e. the loop depth of the 'deepest' loop)
   /// For example given the loop nest:
@@ -181,6 +191,8 @@ public:
 
 protected:
   const unsigned MaxPerfectDepth; // maximum perfect nesting depth level.
+  const bool AllowTapirLoops;     ///< whether nested Tapir parallel loops can
+                                  ///< be considered perfect nests
   LoopVectorTy Loops; // the loops in the nest (in breadth first order).
 
 private:
@@ -192,7 +204,9 @@ private:
   };
   static LoopNestEnum analyzeLoopNestForPerfectNest(const Loop &OuterLoop,
                                                     const Loop &InnerLoop,
-                                                    ScalarEvolution &SE);
+                                                    ScalarEvolution &SE,
+                                                    TaskInfo &TI,
+                                                    bool AllowTapirLoops);
 };
 
 raw_ostream &operator<<(raw_ostream &, const LoopNest &);
