@@ -174,6 +174,10 @@ LoopNest::LoopNestEnum LoopNest::analyzeLoopNestForPerfectNest(
   const BasicBlock *OuterLoopLatch = OuterLoop.getLoopLatch();
   const BasicBlock *InnerLoopPreHeader = InnerLoop.getLoopPreheader();
 
+  // TODO(lgovedic) for Tapir loops, if InnerLoopPreHeader != OuterLoopHeader,
+  //  the loop guard needs to be checked for safe instructions.
+  //  In the serial case, the loop guard will terminate OuterLoopHeader
+  //  (although if there are empty blocks, not sure anymore - check that too).
   if (!containsOnlySafeInstructions(*OuterLoopHeader) ||
       !containsOnlySafeInstructions(*OuterLoopLatch) ||
       (InnerLoopPreHeader != OuterLoopHeader &&
