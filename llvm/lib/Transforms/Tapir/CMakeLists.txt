@@ -3,6 +3,8 @@ add_llvm_component_library(LLVMTapirOpts
   CilkRTSCilkFor.cpp
   CudaABI.cpp
   DRFScopedNoAliasAA.cpp
+  LoopLoweringBase.cpp
+  LoopNestReorder.cpp
   LoopSpawningTI.cpp
   LoopStripMine.cpp
   LoopStripMinePass.cpp

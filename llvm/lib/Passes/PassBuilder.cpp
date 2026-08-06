@@ -219,6 +219,7 @@
 #include "llvm/Transforms/Scalar/StructurizeCFG.h"
 #include "llvm/Transforms/Scalar/TailRecursionElimination.h"
 #include "llvm/Transforms/Scalar/WarnMissedTransforms.h"
+#include "llvm/Transforms/Tapir/LoopNestReorder.h"
 #include "llvm/Transforms/Tapir/LoopSpawningTI.h"
 #include "llvm/Transforms/Tapir/LoopStripMinePass.h"
 #include "llvm/Transforms/Tapir/SerializeSmallTasks.h"
